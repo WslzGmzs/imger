@@ -29,13 +29,26 @@ async function calculateMd5(data: Uint8Array): Promise<string> {
 }
 
 
+// CORS headers helper function
+function getCorsHeaders(): HeadersInit {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
 async function uploadHandler(request: Request): Promise<Response> {
   try {
     const formData = await request.formData();
     const files = formData.getAll("file"); // Get all entries with the name "file"
 
     if (!files || files.length === 0) {
-      return new Response("No files uploaded", { status: 400 });
+      return new Response("No files uploaded", {
+        status: 400,
+        headers: getCorsHeaders()
+      });
     }
 
     const results: { name: string; url?: string; error?: string; status: string }[] = [];
@@ -158,12 +171,18 @@ async function uploadHandler(request: Request): Promise<Response> {
 
     return new Response(JSON.stringify(results), {
       status: status,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...getCorsHeaders()
+      },
     });
 
   } catch (error) {
     console.error("Upload handler error:", error);
-    return new Response("Internal Server Error", { status: 500 });
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: getCorsHeaders()
+    });
   }
 }
 
@@ -176,14 +195,20 @@ async function serveImage(request: Request, imageId: string): Promise<Response> 
       const meta = await kv.get<ImageMeta>(["images", imageId, "meta"]);
        if (meta.value) {
          return new Response(cachedImage, {
-           headers: { "Content-Type": meta.value.type },
+           headers: {
+             "Content-Type": meta.value.type,
+             ...getCorsHeaders()
+           },
          });
        }
     }
 
     const metaEntry = await kv.get<ImageMeta>(["images", imageId, "meta"]);
     if (!metaEntry.value || !metaEntry.value.completed) {
-      return new Response("Image not found or not yet completed", { status: 404 });
+      return new Response("Image not found or not yet completed", {
+        status: 404,
+        headers: getCorsHeaders()
+      });
     }
 
     const imageMeta = metaEntry.value;
@@ -194,7 +219,10 @@ async function serveImage(request: Request, imageId: string): Promise<Response> 
       if (!chunkEntry.value) {
         // This should not happen if metadata is present, but handle defensively
         console.error(`Missing chunk ${i} for image ${imageId}`);
-        return new Response("Image data incomplete", { status: 500 });
+        return new Response("Image data incomplete", {
+          status: 500,
+          headers: getCorsHeaders()
+        });
       }
       chunks.push(chunkEntry.value);
     }
@@ -216,17 +244,31 @@ async function serveImage(request: Request, imageId: string): Promise<Response> 
 
 
     return new Response(fullImage, {
-      headers: { "Content-Type": imageMeta.type },
+      headers: {
+        "Content-Type": imageMeta.type,
+        ...getCorsHeaders()
+      },
     });
 
   } catch (error) {
     console.error("Serve image error:", error);
-    return new Response("Internal Server Error", { status: 500 });
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: getCorsHeaders()
+    });
   }
 }
 
 async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
+
+  // Handle CORS preflight requests
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 200,
+      headers: getCorsHeaders(),
+    });
+  }
 
   if (request.method === "POST" && url.pathname === "/upload") {
     return uploadHandler(request);
@@ -248,7 +290,10 @@ async function handler(request: Request): Promise<Response> {
     return serveFile(request, "./index.html");
   }
 
-  return new Response("Not Found", { status: 404 });
+  return new Response("Not Found", {
+    status: 404,
+    headers: getCorsHeaders()
+  });
 }
 
 console.log("Listening on http://localhost:8000");

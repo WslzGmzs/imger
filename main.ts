@@ -2,299 +2,295 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { serveFile } from "https://deno.land/std@0.224.0/http/file_server.ts";
 import { crypto } from "https://deno.land/std@0.224.0/crypto/mod.ts";
 
-const KV_CHUNK_SIZE = 50 * 1024; // 50KB, slightly less than 55KB limit
+// Deno KV has a chunk size limit, we set it slightly lower to be safe.
+const KV_CHUNK_SIZE = 63 * 1024; // 63KB, Deno KV value size limit is 64KB
 const kv = await Deno.openKv();
 
-// Simple in-memory cache (for demonstration)
-// In a real-world scenario, consider a more robust LRU cache
-const cache = new Map<string, Uint8Array>();
-const CACHE_TTL = 60 * 1000; // Cache entries expire after 60 seconds
+// In-memory cache for frequently accessed images to reduce KV reads.
+const cache = new Map<string, { data: Uint8Array, type: string, timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_ITEMS = 100; // Prevent memory exhaustion
 
+// Interface for image metadata stored in KV.
 interface ImageMeta {
   name: string;
   type: string;
   size: number;
   chunks: number;
   uploadedAt: number;
-  md5: string; // Add MD5 hash to metadata
-  completed: boolean; // Add completion flag
+  md5: string;
+  completed: boolean;
+  deleteToken: string; // Secret token for authorizing deletion
 }
 
-// Function to calculate MD5 hash of a Uint8Array
+// --- Cache Management ---
+function cleanCache() {
+    const now = Date.now();
+    for (const [key, value] of cache.entries()) {
+        if (now - value.timestamp > CACHE_TTL) {
+            cache.delete(key);
+        }
+    }
+    // If cache is still too large, remove oldest items
+    while (cache.size > CACHE_MAX_ITEMS) {
+        const oldestKey = cache.keys().next().value;
+        if (oldestKey) {
+            cache.delete(oldestKey);
+        } else {
+            break;
+        }
+    }
+}
+setInterval(cleanCache, CACHE_TTL); // Periodically clean the cache
+
+// --- Utility Functions ---
 async function calculateMd5(data: Uint8Array): Promise<string> {
   const hashBuffer = await crypto.subtle.digest("MD5", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const md5Hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  return md5Hash;
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-
-// CORS headers helper function
 function getCorsHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age": "86400",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
   };
 }
 
+// --- Route Handlers ---
+
+/**
+ * Handles file uploads, checks for duplicates via MD5,
+ * chunks files, and stores them in Deno KV.
+ */
 async function uploadHandler(request: Request): Promise<Response> {
   try {
     const formData = await request.formData();
-    const files = formData.getAll("file"); // Get all entries with the name "file"
+    const files = formData.getAll("file");
 
     if (!files || files.length === 0) {
-      return new Response("No files uploaded", {
-        status: 400,
-        headers: getCorsHeaders()
-      });
+      return new Response(JSON.stringify({ error: "No files uploaded" }), { status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
     }
 
-    const results: { name: string; url?: string; error?: string; status: string }[] = [];
+    const results = [];
     const origin = new URL(request.url).origin;
 
     for (const file of files) {
       if (typeof file === "string") {
-        results.push({ name: "unknown", error: "Invalid file data", status: "error" });
+        results.push({ name: "unknown", error: "Invalid file data" });
         continue;
       }
 
       try {
         const imageBytes = new Uint8Array(await file.arrayBuffer());
         const md5Hash = await calculateMd5(imageBytes);
-
-        // Check if image with this MD5 hash already exists
         const existingImageEntry = await kv.get<string>(["md5_to_id", md5Hash]);
 
+        // If a completed image with the same hash exists, return its URL.
         if (existingImageEntry.value) {
-          // MD5 exists, check if the image is completed
-          const existingImageId = existingImageEntry.value;
-          const existingMetaEntry = await kv.get<ImageMeta>(["images", existingImageId, "meta"]);
-
-          if (existingMetaEntry.value && existingMetaEntry.value.completed) {
-            // Image is completed, return existing URL
-            const imageUrl = `${origin}/image/${existingImageId}`;
-            console.log(`File ${file.name} (MD5: ${md5Hash}) already exists and is completed. Returning existing URL.`);
-            results.push({ name: file.name, url: imageUrl, status: "cached" });
-          } else {
-            // Image exists but is not completed, or metadata is missing.
-            // Proceed with storing the new upload, potentially overwriting incomplete data.
-            console.log(`File ${file.name} (MD5: ${md5Hash}) exists but is not completed. Overwriting.`);
-            const imageId = existingImageId; // Use the existing ID
-
-            const imageMeta: ImageMeta = {
-              name: file.name,
-              type: file.type,
-              size: imageBytes.byteLength,
-              chunks: Math.ceil(imageBytes.byteLength / KV_CHUNK_SIZE),
-              uploadedAt: Date.now(),
-              md5: md5Hash, // Store MD5 hash in metadata
-              completed: false, // Initialize completion flag to false
-            };
-
-            const kvOperations = kv.atomic();
-
-            // Store metadata (will overwrite if exists)
-            kvOperations.set(["images", imageId, "meta"], imageMeta);
-
-            // MD5 to ID mapping already exists, no need to set again in atomic op
-
-            await kvOperations.commit();
-
-            // Store chunks individually (will overwrite if exists)
-            for (let i = 0; i < imageMeta.chunks; i++) {
-              const start = i * KV_CHUNK_SIZE;
-              const end = Math.min(start + KV_CHUNK_SIZE, imageBytes.byteLength);
-              const chunk = imageBytes.slice(start, end);
-              await kv.set(["images", imageId, "chunk", i], chunk);
-            }
-
-            // Mark image as completed after all chunks are stored
-            await kv.set(["images", imageId, "meta"], { ...imageMeta, completed: true });
-
-            // Extract file extension from original name
-            const fileNameParts = file.name.split('.');
-            const fileExtension = fileNameParts.length > 1 ? fileNameParts.pop() : '';
-            const imageUrl = `${origin}/image/${imageId}${fileExtension ? '.' + fileExtension : ''}`;
-            results.push({ name: file.name, url: imageUrl, status: "overwritten" });
+          const existingMeta = await kv.get<ImageMeta>(["images", existingImageEntry.value, "meta"]);
+          if (existingMeta.value?.completed) {
+            console.log(`Duplicate found for ${file.name}. Returning existing URL.`);
+            const fileExtension = existingMeta.value.name.split('.').pop() || '';
+            const imageUrl = `${origin}/image/${existingImageEntry.value}${fileExtension ? '.' + fileExtension : ''}`;
+            results.push({
+              name: existingMeta.value.name,
+              url: imageUrl,
+              id: existingImageEntry.value,
+              deleteToken: existingMeta.value.deleteToken, // Return existing token
+              status: "duplicate"
+            });
+            continue;
           }
-        } else {
-          // Image does not exist, store it
-          const imageId = crypto.randomUUID();
-          const imageMeta: ImageMeta = {
-            name: file.name,
-            type: file.type,
-            size: imageBytes.byteLength,
-            chunks: Math.ceil(imageBytes.byteLength / KV_CHUNK_SIZE),
-            uploadedAt: Date.now(),
-            md5: md5Hash, // Store MD5 hash in metadata
-            completed: false, // Initialize completion flag to false
-          };
-
-          const kvOperations = kv.atomic();
-
-          // Store metadata
-          kvOperations.set(["images", imageId, "meta"], imageMeta);
-
-          // Store MD5 to ID mapping
-          kvOperations.set(["md5_to_id", md5Hash], imageId);
-
-          await kvOperations.commit();
-
-          // Store chunks individually
-          for (let i = 0; i < imageMeta.chunks; i++) {
-            const start = i * KV_CHUNK_SIZE;
-            const end = Math.min(start + KV_CHUNK_SIZE, imageBytes.byteLength);
-            const chunk = imageBytes.slice(start, end);
-            await kv.set(["images", imageId, "chunk", i], chunk);
-          }
-
-          // Mark image as completed after all chunks are stored
-          await kv.set(["images", imageId, "meta"], { ...imageMeta, completed: true });
-
-          // Extract file extension from original name
-          const fileNameParts = file.name.split('.');
-          const fileExtension = fileNameParts.length > 1 ? fileNameParts.pop() : '';
-          const imageUrl = `${origin}/image/${imageId}${fileExtension ? '.' + fileExtension : ''}`;
-          results.push({ name: file.name, url: imageUrl, status: "uploaded" });
         }
+
+        // Otherwise, proceed with the upload.
+        const imageId = crypto.randomUUID();
+        const deleteToken = crypto.randomUUID();
+        const imageMeta: ImageMeta = {
+          name: file.name,
+          type: file.type,
+          size: imageBytes.byteLength,
+          chunks: Math.ceil(imageBytes.byteLength / KV_CHUNK_SIZE),
+          uploadedAt: Date.now(),
+          md5: md5Hash,
+          completed: false,
+          deleteToken: deleteToken,
+        };
+
+        // Use an atomic operation to ensure metadata and MD5 map are set together.
+        const atomicOp = kv.atomic()
+          .set(["images", imageId, "meta"], imageMeta)
+          .set(["md5_to_id", md5Hash], imageId);
+        const res = await atomicOp.commit();
+        if (!res.ok) {
+            throw new Error("Failed to commit initial metadata to KV.");
+        }
+
+        // Store chunks sequentially.
+        for (let i = 0; i < imageMeta.chunks; i++) {
+          const start = i * KV_CHUNK_SIZE;
+          const end = start + KV_CHUNK_SIZE;
+          const chunk = imageBytes.slice(start, end);
+          await kv.set(["images", imageId, "chunk", i], chunk);
+        }
+
+        // Mark the upload as complete.
+        await kv.set(["images", imageId, "meta"], { ...imageMeta, completed: true });
+
+        const fileExtension = file.name.split('.').pop() || '';
+        const imageUrl = `${origin}/image/${imageId}${fileExtension ? '.' + fileExtension : ''}`;
+        results.push({ name: file.name, url: imageUrl, id: imageId, deleteToken, status: "uploaded" });
 
       } catch (error) {
         console.error(`Error processing file ${file.name}:`, error);
-        results.push({ name: file.name, error: error.message, status: "error" });
+        results.push({ name: file.name, error: error.message });
       }
     }
 
-    // Determine overall status code
-    const status = results.some(r => r.status === "error") ? 500 : 200;
-
     return new Response(JSON.stringify(results), {
-      status: status,
-      headers: {
-        "Content-Type": "application/json",
-        ...getCorsHeaders()
-      },
+      status: 200,
+      headers: { "Content-Type": "application/json", ...getCorsHeaders() },
     });
 
   } catch (error) {
     console.error("Upload handler error:", error);
-    return new Response("Internal Server Error", {
-      status: 500,
-      headers: getCorsHeaders()
-    });
+    return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
   }
 }
 
-async function serveImage(request: Request, imageId: string): Promise<Response> {
+/**
+ * Serves an image by reconstructing it from chunks stored in Deno KV.
+ * Uses an in-memory cache to speed up delivery of popular images.
+ */
+async function serveImage(imageId: string): Promise<Response> {
   try {
-    // Check cache first
-    const cachedImage = cache.get(imageId);
-    if (cachedImage) {
-      console.log(`Serving image ${imageId} from cache`);
-      const meta = await kv.get<ImageMeta>(["images", imageId, "meta"]);
-       if (meta.value) {
-         return new Response(cachedImage, {
-           headers: {
-             "Content-Type": meta.value.type,
-             ...getCorsHeaders()
-           },
-         });
-       }
+    // 1. Check cache
+    const cached = cache.get(imageId);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+      return new Response(cached.data, { headers: { "Content-Type": cached.type, ...getCorsHeaders() } });
     }
 
+    // 2. Fetch metadata from KV
     const metaEntry = await kv.get<ImageMeta>(["images", imageId, "meta"]);
-    if (!metaEntry.value || !metaEntry.value.completed) {
-      return new Response("Image not found or not yet completed", {
-        status: 404,
-        headers: getCorsHeaders()
-      });
+    if (!metaEntry.value?.completed) {
+      return new Response("Image not found or upload incomplete.", { status: 404, headers: getCorsHeaders() });
     }
-
     const imageMeta = metaEntry.value;
-    const chunks: Uint8Array[] = [];
 
+    // 3. Fetch all chunks concurrently
+    const chunkPromises = [];
     for (let i = 0; i < imageMeta.chunks; i++) {
-      const chunkEntry = await kv.get<Uint8Array>(["images", imageId, "chunk", i]);
-      if (!chunkEntry.value) {
-        // This should not happen if metadata is present, but handle defensively
-        console.error(`Missing chunk ${i} for image ${imageId}`);
-        return new Response("Image data incomplete", {
-          status: 500,
-          headers: getCorsHeaders()
-        });
-      }
-      chunks.push(chunkEntry.value);
+      chunkPromises.push(kv.get<Uint8Array>(["images", imageId, "chunk", i]));
     }
+    const chunkEntries = await Promise.all(chunkPromises);
 
+    // 4. Reconstruct the image
     const fullImage = new Uint8Array(imageMeta.size);
     let offset = 0;
-    for (const chunk of chunks) {
-      fullImage.set(chunk, offset);
-      offset += chunk.byteLength;
+    for (const chunkEntry of chunkEntries) {
+      if (!chunkEntry.value) {
+        console.error(`Missing chunk for image ${imageId}`);
+        return new Response("Image data is incomplete.", { status: 500, headers: getCorsHeaders() });
+      }
+      fullImage.set(chunkEntry.value, offset);
+      offset += chunkEntry.value.byteLength;
     }
 
-    // Store in cache
-    cache.set(imageId, fullImage);
-    // Simple cache expiration (in a real app, use setInterval or similar)
-    setTimeout(() => {
-        cache.delete(imageId);
-        console.log(`Cache expired for image ${imageId}`);
-    }, CACHE_TTL);
+    // 5. Update cache
+    cache.set(imageId, { data: fullImage, type: imageMeta.type, timestamp: Date.now() });
 
-
-    return new Response(fullImage, {
-      headers: {
-        "Content-Type": imageMeta.type,
-        ...getCorsHeaders()
-      },
-    });
-
+    return new Response(fullImage, { headers: { "Content-Type": imageMeta.type, ...getCorsHeaders() } });
   } catch (error) {
-    console.error("Serve image error:", error);
-    return new Response("Internal Server Error", {
-      status: 500,
-      headers: getCorsHeaders()
-    });
+    console.error(`Serve image error for ${imageId}:`, error);
+    return new Response("Internal Server Error", { status: 500, headers: getCorsHeaders() });
   }
 }
 
+/**
+ * Deletes an image and its associated data from Deno KV
+ * if the correct delete token is provided.
+ */
+async function deleteImageHandler(imageId: string, deleteToken: string): Promise<Response> {
+    try {
+        const metaEntry = await kv.get<ImageMeta>(["images", imageId, "meta"]);
+        if (!metaEntry.value) {
+            return new Response(JSON.stringify({ error: "Image not found" }), { status: 404, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+        }
+
+        const imageMeta = metaEntry.value;
+        if (imageMeta.deleteToken !== deleteToken) {
+            return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 403, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+        }
+
+        // Create an atomic operation to delete all data
+        const atomicOp = kv.atomic();
+        atomicOp.delete(["images", imageId, "meta"]);
+        atomicOp.delete(["md5_to_id", imageMeta.md5]);
+        for (let i = 0; i < imageMeta.chunks; i++) {
+            atomicOp.delete(["images", imageId, "chunk", i]);
+        }
+
+        const res = await atomicOp.commit();
+        if (!res.ok) {
+            throw new Error("Failed to commit deletion to KV.");
+        }
+
+        // Also remove from cache if present
+        cache.delete(imageId);
+
+        console.log(`Successfully deleted image ${imageId}`);
+        return new Response(JSON.stringify({ message: "Image deleted successfully" }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+
+    } catch (error) {
+        console.error(`Delete image error for ${imageId}:`, error);
+        return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+    }
+}
+
+
+/**
+ * Main request handler, routing requests to the appropriate function.
+ */
 async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
+  const { pathname } = url;
 
-  // Handle CORS preflight requests
   if (request.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: getCorsHeaders(),
-    });
+    return new Response(null, { status: 204, headers: getCorsHeaders() });
   }
 
-  if (request.method === "POST" && url.pathname === "/upload") {
+  if (request.method === "POST" && pathname === "/upload") {
     return uploadHandler(request);
   }
 
-  if (url.pathname.startsWith("/image/")) {
-    // Extract UUID from the new URL format /[UUID].[extension]
-    const pathParts = url.pathname.split("/");
-    const filenameWithExtension = pathParts.pop(); // Get the last part, e.g., "a1b2c3d4...jpg"
-    if (filenameWithExtension) {
-      const filenameParts = filenameWithExtension.split('.');
-      const imageId = filenameParts[0]; // The UUID is the first part
-      return serveImage(request, imageId);
+  const imageRouteMatch = pathname.match(/^\/image\/([0-9a-fA-F-]+)(\.\w+)?$/);
+  if (request.method === "GET" && imageRouteMatch) {
+    const imageId = imageRouteMatch[1];
+    return serveImage(imageId);
+  }
+
+  const deleteRouteMatch = pathname.match(/^\/api\/image\/([0-9a-fA-F-]+)\/([0-9a-fA-F-]+)$/);
+  if (request.method === "DELETE" && deleteRouteMatch) {
+      const [, imageId, deleteToken] = deleteRouteMatch;
+      return deleteImageHandler(imageId, deleteToken);
+  }
+
+  if (pathname === "/" || pathname === "/index.html") {
+    try {
+        // Deno Deploy requires a relative path from the entrypoint file.
+        return await serveFile(request, new URL("./index.html", import.meta.url).pathname);
+    } catch (e) {
+        if (e instanceof Deno.errors.NotFound) {
+            return new Response("index.html not found.", { status: 404 });
+        }
+        return new Response("Error serving file.", { status: 500 });
     }
   }
 
-  // Serve the index.html file for the root path
-  if (url.pathname === "/" || url.pathname === "/index.html") {
-    return serveFile(request, "./index.html");
-  }
-
-  return new Response("Not Found", {
-    status: 404,
-    headers: getCorsHeaders()
-  });
+  return new Response("Not Found", { status: 404, headers: getCorsHeaders() });
 }
 
-console.log("Listening on http://localhost:8000");
+console.log("Image server running on http://localhost:8000");
 serve(handler);

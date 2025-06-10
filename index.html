@@ -90,9 +90,8 @@
     const toast = document.getElementById('toast');
 
     let filesToUpload = [];
-    let uploadedImagesState = []; // Holds the state of images fetched from server
+    let uploadedImagesState = [];
 
-    // --- Event Listeners ---
     document.addEventListener('DOMContentLoaded', loadUploadedImagesFromServer);
     dropArea.addEventListener('click', () => fileElem.click());
     fileElem.addEventListener('change', (e) => handleFileSelection(e.target.files));
@@ -116,7 +115,12 @@
 
     function handleFileSelection(files) {
         const newFiles = [...files].filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+        if (newFiles.length === 0 && files.length > 0) {
+            showToast('Only image and video files are allowed.', 'warning');
+            return;
+        }
         if (newFiles.length === 0) return;
+
         filesToUpload = [...filesToUpload, ...newFiles];
         displayFilesToUpload();
         uploadButton.disabled = false;
@@ -140,9 +144,19 @@
                 const img = document.createElement('img');
                 img.classList.add('thumbnail');
                 img.alt = file.name;
-                const reader = new FileReader();
-                reader.onload = e => { img.src = e.target.result; thumbCell.appendChild(img); resolve(row); };
-                reader.readAsDataURL(file);
+                if (file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = e => { img.src = e.target.result; thumbCell.appendChild(img); resolve(row); };
+                    reader.onerror = () => { thumbCell.textContent = '🖼️'; resolve(row); }; // Fallback icon
+                    reader.readAsDataURL(file);
+                } else if (file.type.startsWith('video/')) {
+                    thumbCell.textContent = '🎬'; // Video icon
+                    resolve(row);
+                } else {
+                    thumbCell.textContent = '📄'; // Generic file icon
+                    resolve(row);
+                }
+
 
                 nameCell.textContent = file.name;
                 nameCell.classList.add('filename');
@@ -169,8 +183,13 @@
     }
 
     async function handleUpload(event) {
-        event.preventDefault();
-        if (filesToUpload.length === 0) return;
+        event.preventDefault(); // CRITICAL: Must be first
+        event.stopPropagation();
+
+        if (filesToUpload.length === 0) {
+            showToast('Please select files to upload.', 'error');
+            return;
+        }
 
         setLoadingState(true);
         progressBar.style.display = 'block';
@@ -181,45 +200,77 @@
 
         try {
             const response = await fetch('/upload', { method: 'POST', body: formData });
-            progressBar.setAttribute('value', '100');
+            
+            let responseData;
+            try {
+                responseData = await response.json();
+            } catch (e) {
+                // This means server returned non-JSON, likely an HTML error page or unexpected output
+                console.error("Failed to parse server response as JSON:", e, "Status:", response.status, response.statusText);
+                throw new Error(`Server error: ${response.status} ${response.statusText}. Check server logs.`);
+            }
+            
+            progressBar.setAttribute('value', '100'); // Visually complete progress
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({error: `Upload failed with status: ${response.status}`}));
-                throw new Error(errorData.error || `Upload failed`);
+            if (!response.ok && response.status !== 207) { // 207 is Multi-Status, handled below
+                const errorMsg = responseData.error || (Array.isArray(responseData) && responseData[0]?.error) || `Upload request failed: ${response.status}`;
+                throw new Error(errorMsg);
             }
 
-            const newUploads = await response.json();
-            // Prepend new successful uploads to our state and re-render
-            const successfulNewUploads = newUploads.filter(item => item.url && item.status !== 'error');
-            uploadedImagesState = [...successfulNewUploads, ...uploadedImagesState];
-            displayUploadedImages();
-            showToast('Upload successful!', 'success');
+            const allResults = Array.isArray(responseData) ? responseData : [];
+            const successfulNewUploads = allResults.filter(item => item.url && !item.error && item.status !== 'error');
+            const erroredUploads = allResults.filter(item => item.error || item.status === 'error');
 
-            filesToUpload = [];
+            if (successfulNewUploads.length > 0) {
+                // Add to state and re-sort by date, newest first
+                uploadedImagesState = [...successfulNewUploads, ...uploadedImagesState]
+                    .filter((img, index, self) => index === self.findIndex((t) => t.id === img.id)) // Deduplicate by id
+                    .sort((a,b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+                displayUploadedImages(); // Re-render the list of all images
+                showToast(`${successfulNewUploads.length} file(s) uploaded!`, 'success');
+            }
+
+            if (erroredUploads.length > 0) {
+                const firstError = erroredUploads[0].error || "Some files failed to upload.";
+                showToast(`${erroredUploads.length} file(s) failed: ${firstError}`, 'error');
+                console.error("Files failed to upload:", erroredUploads);
+            }
+            
+            if (successfulNewUploads.length === 0 && erroredUploads.length === 0 && allResults.every(r => r.status === 'duplicate')) {
+                 showToast('All selected files are duplicates of existing uploads.', 'info');
+            } else if (successfulNewUploads.length === 0 && erroredUploads.length === 0 && filesToUpload.length > 0) {
+                 showToast('Upload processed, but no files were returned as new or errored.', 'warning');
+            }
+
+            filesToUpload = []; // Clear list after processing
             displayFilesToUpload();
             uploadButton.disabled = true;
 
         } catch (error) {
-            console.error('Upload error:', error);
-            showToast(`Upload failed: ${error.message}`, 'error');
+            console.error('HandleUpload main catch error:', error);
+            showToast(`Upload error: ${error.message}`, 'error');
+            // Keep filesToUpload so user can retry if it was a network issue.
         } finally {
             setLoadingState(false);
-            setTimeout(() => progressBar.style.display = 'none', 500);
+            setTimeout(() => {
+                progressBar.style.display = 'none';
+                progressBar.removeAttribute('value');
+            }, 1000);
         }
     }
     
     async function loadUploadedImagesFromServer() {
         loadingIndicator.style.display = 'block';
-        resultContainer.style.display = 'block'; // Show container even if empty initially
-        resultsTableBody.innerHTML = ''; // Clear previous results
+        resultContainer.style.display = 'block';
+        resultsTableBody.innerHTML = '';
 
         try {
             const response = await fetch('/api/images');
             if (!response.ok) {
-                throw new Error(`Failed to fetch images: ${response.statusText}`);
+                throw new Error(`Failed to fetch images: ${response.status} ${response.statusText}`);
             }
             const imagesFromServer = await response.json();
-            uploadedImagesState = imagesFromServer;
+            uploadedImagesState = imagesFromServer.sort((a,b) => (b.uploadedAt || 0) - (a.uploadedAt || 0)); // Sort by date
             displayUploadedImages();
         } catch (error) {
             console.error('Error loading images from server:', error);
@@ -231,9 +282,9 @@
     }
 
     function displayUploadedImages() {
-        resultsTableBody.innerHTML = ''; // Clear previous items
+        resultsTableBody.innerHTML = '';
         if (uploadedImagesState.length === 0) {
-            resultContainer.style.display = 'block'; // Keep container visible
+            resultContainer.style.display = 'block';
             resultsTableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No images uploaded yet.</td></tr>';
             return;
         }
@@ -251,6 +302,7 @@
             img.src = item.url;
             img.alt = `Preview of ${item.name}`;
             img.classList.add('thumbnail');
+            img.onerror = () => { previewCell.textContent = '⚠️'; previewCell.title = 'Error loading preview'; }; // Preview error
             previewLink.appendChild(img);
             previewCell.appendChild(previewLink);
 
@@ -289,7 +341,8 @@
     }
 
     async function handleDelete(id, token) {
-        if (!confirm(`Are you sure you want to permanently delete this image: ${uploadedImagesState.find(img => img.id === id)?.name || id}?`)) return;
+        const imageName = uploadedImagesState.find(img => img.id === id)?.name || id;
+        if (!confirm(`Are you sure you want to permanently delete: ${imageName}?`)) return;
 
         try {
             const response = await fetch(`/api/image/${id}/${token}`, { method: 'DELETE' });
@@ -299,18 +352,18 @@
             }
             
             uploadedImagesState = uploadedImagesState.filter(img => img.id !== id);
-            displayUploadedImages(); // Re-render
+            displayUploadedImages();
             showToast('Image deleted successfully.', 'success');
 
         } catch (error) {
             console.error('Delete error:', error);
-            showToast(`Error: ${error.message}`, 'error');
+            showToast(`Error deleting image: ${error.message}`, 'error');
         }
     }
 
     function setLoadingState(isLoading) {
         uploadButton.disabled = isLoading;
-        uploadSpinner.style.display = isLoading ? 'inline-block' : 'none';
+        uploadSpinner.style.display = isLoading ? 'inline-block' : 'none'; // Assuming you have an actual spinner element
         uploadButton.setAttribute('aria-busy', isLoading ? 'true' : 'false');
     }
 
@@ -318,16 +371,21 @@
         navigator.clipboard.writeText(text).then(() => {
             showToast(`${type} copied to clipboard!`, 'success');
         }).catch(err => {
-            showToast(`Failed to copy ${type}. Check console for details.`, 'error');
+            showToast(`Failed to copy ${type}. Check console.`, 'error');
             console.error('Clipboard error:', err);
         });
     }
 
     let toastTimeout;
-    function showToast(message, type = 'success') {
+    function showToast(message, type = 'info') { // Default to info
         clearTimeout(toastTimeout);
         toast.textContent = message;
-        toast.style.backgroundColor = type === 'error' ? 'var(--pico-color-red-600)' : 'var(--pico-color-green-600)';
+        switch(type) {
+            case 'success': toast.style.backgroundColor = 'var(--pico-color-green-600)'; break;
+            case 'error': toast.style.backgroundColor = 'var(--pico-color-red-600)'; break;
+            case 'warning': toast.style.backgroundColor = 'var(--pico-color-amber-600)'; break;
+            default: toast.style.backgroundColor = 'var(--pico-color-slate-600)'; break;
+        }
         toast.classList.add('show');
         toastTimeout = setTimeout(() => {
             toast.classList.remove('show');

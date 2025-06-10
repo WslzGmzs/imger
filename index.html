@@ -3,81 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Imger - Fast, Free Image Hosting</title>
+    <title>Imger - Lightweight Image Hosting</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <style>
-        :root {
-            --pico-font-size: 100%;
-        }
-        body {
-            padding: 1rem;
-        }
-        .container {
-            max-width: 960px;
-            margin: auto;
-        }
-        #drop-area {
-            border: 2px dashed var(--pico-secondary-border);
-            border-radius: var(--pico-border-radius);
-            padding: 2rem;
-            text-align: center;
-            cursor: pointer;
-            margin-bottom: 1rem;
-            transition: border-color 0.2s, background-color 0.2s;
-        }
-        #drop-area.highlight {
-            border-color: var(--pico-primary);
-            background-color: var(--pico-primary-background);
-        }
-        #fileElem {
-            display: none;
-        }
-        #upload-button {
-            width: 100%;
-        }
-        .thumbnail {
-            width: 60px;
-            height: 60px;
-            object-fit: cover;
-            border-radius: var(--pico-border-radius);
-            vertical-align: middle;
-        }
-        .filename {
-            max-width: 200px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            vertical-align: middle;
-        }
-        .action-btn {
-            padding: 0.25rem 0.5rem;
-            font-size: 0.8rem;
-            margin: 0.1rem;
-        }
-        .toast {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 10px 20px;
-            border-radius: 5px;
-            color: white;
-            background-color: #333;
-            z-index: 1000;
-            opacity: 0;
-            transition: opacity 0.5s, bottom 0.5s;
-        }
-        .toast.show {
-            opacity: 1;
-            bottom: 30px;
-        }
-        table {
-            table-layout: fixed;
-            width: 100%;
-        }
-        td, th {
-            word-wrap: break-word;
-        }
+        :root { --pico-font-size: 100%; }
+        body { padding: 1rem; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif; }
+        .container { max-width: 960px; margin: auto; }
+        #drop-area { border: 2px dashed var(--pico-secondary-border); border-radius: var(--pico-border-radius); padding: 2rem; text-align: center; cursor: pointer; margin-bottom: 1rem; transition: border-color 0.2s, background-color 0.2s; }
+        #drop-area.highlight { border-color: var(--pico-primary); background-color: var(--pico-primary-background); }
+        #fileElem { display: none; }
+        #upload-button { width: 100%; }
+        .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: var(--pico-border-radius); vertical-align: middle; }
+        .filename { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+        .action-btn { padding: 0.25rem 0.5rem; font-size: 0.8rem; margin: 0.1rem; }
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: var(--pico-border-radius); color: var(--pico-contrast-inverse); background-color: var(--pico-contrast); z-index: 1000; opacity: 0; transition: opacity 0.5s, bottom 0.5s; box-shadow: var(--pico-box-shadow); }
+        .toast.show { opacity: 1; bottom: 30px; }
+        table { table-layout: fixed; width: 100%; }
+        td, th { word-wrap: break-word; }
+        #file-list-container h6, #result-container h3 { margin-top: 1.5rem; margin-bottom: 0.5rem; }
+        #loading-indicator { text-align: center; padding: 1rem; font-style: italic; color: var(--pico-muted-foreground-color); }
     </style>
 </head>
 <body>
@@ -85,7 +29,7 @@
         <article>
             <hgroup>
                 <h1>Imger</h1>
-                <h2>Fast, free, login-free image hosting on the edge.</h2>
+                <h2>Lightweight, login-free image hosting.</h2>
             </hgroup>
 
             <form id="uploadForm" enctype="multipart/form-data">
@@ -97,15 +41,15 @@
                         <small>or Drag & Drop Here</small>
                     </label>
                 </div>
-                <progress id="progress-bar" style="display: none;"></progress>
+                <progress id="progress-bar" style="display: none; width: 100%;"></progress>
                 <div id="file-list-container" style="display: none;">
                     <h6>Files to Upload</h6>
-                    <table id="file-list-table">
+                    <table id="file-list-table" role="grid">
                         <tbody></tbody>
                     </table>
                 </div>
                 <button type="submit" id="upload-button" disabled>
-                    <span role="status" id="upload-spinner" hidden></span>
+                    <span role="status" id="upload-spinner" aria-hidden="true" style="display:none;"></span>
                     Upload Files
                 </button>
             </form>
@@ -113,8 +57,9 @@
             <div id="result-container" style="display: none;">
                 <hr>
                 <h3>Uploaded Images</h3>
+                <div id="loading-indicator" style="display: none;">Loading images...</div>
                 <div style="overflow-x: auto;">
-                    <table id="results-table">
+                    <table id="results-table" role="grid">
                         <thead>
                             <tr>
                                 <th scope="col" style="width: 80px;">Preview</th>
@@ -141,13 +86,14 @@
     const progressBar = document.getElementById('progress-bar');
     const resultsTableBody = document.getElementById('results-table').querySelector('tbody');
     const resultContainer = document.getElementById('result-container');
+    const loadingIndicator = document.getElementById('loading-indicator');
     const toast = document.getElementById('toast');
 
     let filesToUpload = [];
-    let uploadedImages = [];
+    let uploadedImagesState = []; // Holds the state of images fetched from server
 
     // --- Event Listeners ---
-    document.addEventListener('DOMContentLoaded', loadFromLocalStorage);
+    document.addEventListener('DOMContentLoaded', loadUploadedImagesFromServer);
     dropArea.addEventListener('click', () => fileElem.click());
     fileElem.addEventListener('change', (e) => handleFileSelection(e.target.files));
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -191,40 +137,32 @@
                 const nameCell = document.createElement('td');
                 const actionCell = document.createElement('td');
 
-                // Thumbnail
                 const img = document.createElement('img');
                 img.classList.add('thumbnail');
                 img.alt = file.name;
                 const reader = new FileReader();
-                reader.onload = e => {
-                    img.src = e.target.result;
-                    thumbCell.appendChild(img);
-                    resolve(row);
-                };
+                reader.onload = e => { img.src = e.target.result; thumbCell.appendChild(img); resolve(row); };
                 reader.readAsDataURL(file);
 
-                // Filename
                 nameCell.textContent = file.name;
                 nameCell.classList.add('filename');
                 nameCell.title = file.name;
 
-                // Remove Button
                 const removeButton = document.createElement('button');
                 removeButton.textContent = 'Remove';
                 removeButton.classList.add('secondary', 'outline', 'action-btn');
                 removeButton.type = 'button';
-                removeButton.onclick = () => removeFile(index);
+                removeButton.onclick = () => removeFileFromUploadList(index);
                 actionCell.appendChild(removeButton);
 
                 row.append(thumbCell, nameCell, actionCell);
             });
         });
-
         const rows = await Promise.all(filePromises);
         rows.forEach(row => fileListTableBody.appendChild(row));
     }
 
-    function removeFile(index) {
+    function removeFileFromUploadList(index) {
         filesToUpload.splice(index, 1);
         displayFilesToUpload();
         uploadButton.disabled = filesToUpload.length === 0;
@@ -234,29 +172,29 @@
         event.preventDefault();
         if (filesToUpload.length === 0) return;
 
-        setLoading(true);
+        setLoadingState(true);
         progressBar.style.display = 'block';
-        progressBar.removeAttribute('value'); // Indeterminate progress
+        progressBar.removeAttribute('value');
 
         const formData = new FormData();
         filesToUpload.forEach(file => formData.append('file', file));
 
         try {
             const response = await fetch('/upload', { method: 'POST', body: formData });
-            progressBar.setAttribute('value', '100'); // Complete
+            progressBar.setAttribute('value', '100');
 
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `Upload failed with status: ${response.status}`);
+                const errorData = await response.json().catch(() => ({error: `Upload failed with status: ${response.status}`}));
+                throw new Error(errorData.error || `Upload failed`);
             }
 
             const newUploads = await response.json();
-            uploadedImages = [...newUploads.filter(item => item.url), ...uploadedImages];
-            saveToLocalStorage();
+            // Prepend new successful uploads to our state and re-render
+            const successfulNewUploads = newUploads.filter(item => item.url && item.status !== 'error');
+            uploadedImagesState = [...successfulNewUploads, ...uploadedImagesState];
             displayUploadedImages();
             showToast('Upload successful!', 'success');
 
-            // Clear the upload list
             filesToUpload = [];
             displayFilesToUpload();
             uploadButton.disabled = true;
@@ -265,24 +203,46 @@
             console.error('Upload error:', error);
             showToast(`Upload failed: ${error.message}`, 'error');
         } finally {
-            setLoading(false);
+            setLoadingState(false);
             setTimeout(() => progressBar.style.display = 'none', 500);
+        }
+    }
+    
+    async function loadUploadedImagesFromServer() {
+        loadingIndicator.style.display = 'block';
+        resultContainer.style.display = 'block'; // Show container even if empty initially
+        resultsTableBody.innerHTML = ''; // Clear previous results
+
+        try {
+            const response = await fetch('/api/images');
+            if (!response.ok) {
+                throw new Error(`Failed to fetch images: ${response.statusText}`);
+            }
+            const imagesFromServer = await response.json();
+            uploadedImagesState = imagesFromServer;
+            displayUploadedImages();
+        } catch (error) {
+            console.error('Error loading images from server:', error);
+            showToast('Could not load previously uploaded images.', 'error');
+            resultsTableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Failed to load images.</td></tr>';
+        } finally {
+            loadingIndicator.style.display = 'none';
         }
     }
 
     function displayUploadedImages() {
-        if (uploadedImages.length === 0) {
-            resultContainer.style.display = 'none';
+        resultsTableBody.innerHTML = ''; // Clear previous items
+        if (uploadedImagesState.length === 0) {
+            resultContainer.style.display = 'block'; // Keep container visible
+            resultsTableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No images uploaded yet.</td></tr>';
             return;
         }
         resultContainer.style.display = 'block';
-        resultsTableBody.innerHTML = '';
 
-        uploadedImages.forEach(item => {
+        uploadedImagesState.forEach(item => {
             const row = resultsTableBody.insertRow();
             row.id = `result-${item.id}`;
 
-            // Preview
             const previewCell = row.insertCell();
             const previewLink = document.createElement('a');
             previewLink.href = item.url;
@@ -294,38 +254,32 @@
             previewLink.appendChild(img);
             previewCell.appendChild(previewLink);
 
-            // Filename
             const nameCell = row.insertCell();
             nameCell.textContent = item.name;
             nameCell.classList.add('filename');
             nameCell.title = item.name;
 
-            // URL
             const urlCell = row.insertCell();
             const urlLink = document.createElement('a');
             urlLink.href = item.url;
-            urlLink.textContent = item.url;
+            urlLink.textContent = item.url.length > 30 ? item.url.substring(0, 27) + '...' : item.url;
+            urlLink.title = item.url;
             urlLink.target = '_blank';
             urlCell.appendChild(urlLink);
 
-            // Actions
             const actionsCell = row.insertCell();
-            
-            // Copy URL Button
             const copyBtn = document.createElement('button');
             copyBtn.textContent = 'Copy';
             copyBtn.classList.add('outline', 'action-btn');
             copyBtn.onclick = () => copyToClipboard(item.url, 'URL');
             actionsCell.appendChild(copyBtn);
 
-            // Preview Button
             const previewBtn = document.createElement('button');
-            previewBtn.textContent = 'Preview';
+            previewBtn.textContent = 'View';
             previewBtn.classList.add('outline', 'action-btn');
             previewBtn.onclick = () => window.open(item.url, '_blank');
             actionsCell.appendChild(previewBtn);
 
-            // Delete Button
             const deleteBtn = document.createElement('button');
             deleteBtn.textContent = 'Delete';
             deleteBtn.classList.add('contrast', 'outline', 'action-btn');
@@ -335,20 +289,17 @@
     }
 
     async function handleDelete(id, token) {
-        if (!confirm('Are you sure you want to permanently delete this image?')) return;
+        if (!confirm(`Are you sure you want to permanently delete this image: ${uploadedImagesState.find(img => img.id === id)?.name || id}?`)) return;
 
         try {
             const response = await fetch(`/api/image/${id}/${token}`, { method: 'DELETE' });
             if (!response.ok) {
-                const errorData = await response.json();
+                const errorData = await response.json().catch(() => ({error: 'Failed to delete image.'}));
                 throw new Error(errorData.error || 'Failed to delete image.');
             }
             
-            // Remove from UI and local storage
-            document.getElementById(`result-${id}`)?.remove();
-            uploadedImages = uploadedImages.filter(img => img.id !== id);
-            saveToLocalStorage();
-            displayUploadedImages(); // Re-render to hide table if empty
+            uploadedImagesState = uploadedImagesState.filter(img => img.id !== id);
+            displayUploadedImages(); // Re-render
             showToast('Image deleted successfully.', 'success');
 
         } catch (error) {
@@ -357,18 +308,17 @@
         }
     }
 
-    // --- Utility Functions ---
-    function setLoading(isLoading) {
+    function setLoadingState(isLoading) {
         uploadButton.disabled = isLoading;
-        uploadSpinner.hidden = !isLoading;
-        uploadButton.ariaBusy = isLoading ? 'true' : 'false';
+        uploadSpinner.style.display = isLoading ? 'inline-block' : 'none';
+        uploadButton.setAttribute('aria-busy', isLoading ? 'true' : 'false');
     }
 
     function copyToClipboard(text, type) {
         navigator.clipboard.writeText(text).then(() => {
             showToast(`${type} copied to clipboard!`, 'success');
         }).catch(err => {
-            showToast(`Failed to copy ${type}.`, 'error');
+            showToast(`Failed to copy ${type}. Check console for details.`, 'error');
             console.error('Clipboard error:', err);
         });
     }
@@ -377,34 +327,11 @@
     function showToast(message, type = 'success') {
         clearTimeout(toastTimeout);
         toast.textContent = message;
-        toast.style.backgroundColor = type === 'error' ? 'var(--pico-color-red-500)' : 'var(--pico-color-green-500)';
+        toast.style.backgroundColor = type === 'error' ? 'var(--pico-color-red-600)' : 'var(--pico-color-green-600)';
         toast.classList.add('show');
         toastTimeout = setTimeout(() => {
             toast.classList.remove('show');
         }, 3000);
-    }
-
-    function saveToLocalStorage() {
-        try {
-            // Only store essential data to avoid large localStorage usage
-            const dataToStore = uploadedImages.map(({ id, name, url, deleteToken }) => ({ id, name, url, deleteToken }));
-            localStorage.setItem('imger_uploads', JSON.stringify(dataToStore));
-        } catch (e) {
-            console.warn('Could not save to localStorage:', e);
-        }
-    }
-
-    function loadFromLocalStorage() {
-        try {
-            const stored = localStorage.getItem('imger_uploads');
-            if (stored) {
-                uploadedImages = JSON.parse(stored);
-                displayUploadedImages();
-            }
-        } catch (e) {
-            console.warn('Could not load from localStorage:', e);
-            localStorage.removeItem('imger_uploads');
-        }
     }
 </script>
 </body>

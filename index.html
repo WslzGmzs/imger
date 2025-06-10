@@ -1,161 +1,82 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Imger [BETA]</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1.5.10/css/pico.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Imger - Fast, Free Image Hosting</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <style>
+        :root {
+            --pico-font-size: 100%;
+        }
         body {
-            padding: 20px;
+            padding: 1rem;
         }
         .container {
-            max-width: 800px; /* Increased max-width */
+            max-width: 960px;
             margin: auto;
         }
         #drop-area {
-            border: 2px dashed #ccc;
-            border-radius: 5px;
-            padding: 20px;
+            border: 2px dashed var(--pico-secondary-border);
+            border-radius: var(--pico-border-radius);
+            padding: 2rem;
             text-align: center;
             cursor: pointer;
-            margin-bottom: 20px;
+            margin-bottom: 1rem;
+            transition: border-color 0.2s, background-color 0.2s;
         }
         #drop-area.highlight {
-            border-color: purple;
+            border-color: var(--pico-primary);
+            background-color: var(--pico-primary-background);
         }
         #fileElem {
-            display: none; /* Hide the default file input */
+            display: none;
         }
         #upload-button {
-            margin-top: 10px;
-        }
-        #result {
-            margin-top: 20px;
-            overflow-x: auto; /* Add horizontal scroll for results table */
-        }
-        #uploadForm {
-             overflow-x: auto; /* Add horizontal scroll for file list table */
-        }
-        .image-url {
-            word-break: break-all;
-            background-color: var(--pico-form-element-background-color);
-            padding: var(--pico-form-element-padding);
-            border-radius: var(--pico-border-radius);
-            margin-top: 10px;
+            width: 100%;
         }
         .thumbnail {
-            width: 50px;
-            height: 50px;
+            width: 60px;
+            height: 60px;
             object-fit: cover;
             border-radius: var(--pico-border-radius);
+            vertical-align: middle;
         }
         .filename {
-            font-weight: bold;
+            max-width: 200px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            vertical-align: middle;
         }
-        .status-icon {
-            font-size: 1.2em;
+        .action-btn {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.8rem;
+            margin: 0.1rem;
         }
-        .copy-button {
-            margin-left: 5px;
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            border-radius: 5px;
+            color: white;
+            background-color: #333;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.5s, bottom 0.5s;
         }
-        .dropdown {
-            position: relative;
-            display: inline-block;
+        .toast.show {
+            opacity: 1;
+            bottom: 30px;
         }
-        .dropdown-content {
-            display: none;
-            position: absolute;
-            background-color: #f9f9f9;
-            min-width: 160px;
-            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-            z-index: 1;
-            border-radius: var(--pico-border-radius);
-            padding: 5px 0;
-            bottom: 100%; /* Position above the button */
-            left: 0; /* Align to the left */
+        table {
+            table-layout: fixed;
+            width: 100%;
         }
-        .dropdown-content a {
-            color: black;
-            padding: 6px 10px;
-            text-decoration: none;
-            display: block;
-            cursor: pointer;
-        }
-        .dropdown-content a:hover {
-            background-color: #f1f1f1;
-        }
-        .dropdown:hover .dropdown-content {
-            display: block;
-        }
-
-        /* Ensure URL column breaks long text */
-        #results-table td:nth-of-type(4) {
-            word-break: break-all;
-        }
-
-
-        /* Mobile responsiveness */
-        @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-            .container {
-                max-width: 100%;
-            }
-            table {
-                width: 100%; /* Add width 100% */
-                table-layout: fixed; /* Add table-layout fixed */
-                display: block;
-            }
-            thead, tbody, th, td, tr {
-                display: block;
-            }
-            thead tr {
-                position: absolute;
-                top: -9999px;
-                left: -9999px;
-            }
-            tr { border: 1px solid #ccc; margin-bottom: 5px; }
-            td {
-                border: none;
-                border-bottom: 1px solid #eee;
-                position: relative;
-                padding-left: 50%;
-                text-align: right;
-                word-break: break-word; /* Ensure long words break */
-            }
-            td:before {
-                position: absolute;
-                top: 6px;
-                left: 6px;
-                width: 45%;
-                padding-right: 10px;
-                white-space: nowrap;
-                content: attr(data-label); /* Use data-label for column headers */
-                font-weight: bold;
-                text-align: left;
-            }
-            /* Specific data-labels for tables */
-            #file-list-table td:nth-of-type(1):before { content: "缩略图"; }
-            #file-list-table td:nth-of-type(2):before { content: "文件名"; }
-            #file-list-table td:nth-of-type(3):before { content: "操作"; }
-
-            #results-table td:nth-of-type(1):before { content: "Thumbnail"; }
-            #results-table td:nth-of-type(2):before { content: "Filename"; }
-            #results-table td:nth-of-type(3):before { content: "Status"; }
-            #results-table td:nth-of-type(4):before { content: "URL"; }
-            #results-table td:nth-of-type(5):before { content: "Actions"; }
-
-            .dropdown {
-                display: block; /* Stack dropdown on mobile */
-                margin-top: 5px;
-            }
-            .dropdown-content {
-                position: static; /* Remove absolute positioning on mobile */
-                box-shadow: none;
-                min-width: auto;
-                bottom: auto; /* Reset bottom on mobile */
-                left: auto; /* Reset left on mobile */
-            }
+        td, th {
+            word-wrap: break-word;
         }
     </style>
 </head>
@@ -164,375 +85,327 @@
         <article>
             <hgroup>
                 <h1>Imger</h1>
-                <h2>Simple, login-free image hosting</h2>
+                <h2>Fast, free, login-free image hosting on the edge.</h2>
             </hgroup>
 
             <form id="uploadForm" enctype="multipart/form-data">
                 <div id="drop-area">
-                    <input type="file" id="fileElem" multiple accept="image/*">
-                    <p>Select or Drag & Drop Files Here</p>
-                    <p>or drag and drop multiple files</p>
+                    <input type="file" id="fileElem" multiple accept="image/*,video/*">
+                    <label for="fileElem" role="button" class="secondary outline">
+                        Click to Select Files
+                        <br>
+                        <small>or Drag & Drop Here</small>
+                    </label>
                 </div>
-                <progress id="progress-bar" value="0" max="100" style="width: 100%; display: none;"></progress>
-                <table id="file-list-table" class="striped" style="display: none;">
-                    <thead>
-                        <tr>
-                            <th>缩略图</th>
-                            <th>文件名</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Files to upload will be added here -->
-                    </tbody>
-                </table>
-                <button type="submit" id="upload-button" class="primary" disabled>Upload Files</button>
+                <progress id="progress-bar" style="display: none;"></progress>
+                <div id="file-list-container" style="display: none;">
+                    <h6>Files to Upload</h6>
+                    <table id="file-list-table">
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <button type="submit" id="upload-button" disabled>
+                    <span role="status" id="upload-spinner" hidden></span>
+                    Upload Files
+                </button>
             </form>
 
-            <div id="result">
-                <table id="results-table" class="striped" style="display: none;">
-                    <thead>
-                        <tr>
-                            <th>Thumbnail</th>
-                            <th>Filename</th>
-                            <th>Status</th>
-                            <th>URL</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Results will be added here -->
-                    </tbody>
-                </table>
+            <div id="result-container" style="display: none;">
+                <hr>
+                <h3>Uploaded Images</h3>
+                <div style="overflow-x: auto;">
+                    <table id="results-table">
+                        <thead>
+                            <tr>
+                                <th scope="col" style="width: 80px;">Preview</th>
+                                <th scope="col">Filename</th>
+                                <th scope="col">URL</th>
+                                <th scope="col" style="width: 200px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
             </div>
         </article>
     </main>
+    <div id="toast" class="toast" role="alert"></div>
 
 <script>
     const dropArea = document.getElementById('drop-area');
     const fileElem = document.getElementById('fileElem');
-    const fileListTable = document.getElementById('file-list-table');
-    const fileListTableBody = fileListTable.querySelector('tbody');
+    const fileListTableBody = document.getElementById('file-list-table').querySelector('tbody');
+    const fileListContainer = document.getElementById('file-list-container');
     const uploadButton = document.getElementById('upload-button');
-    const resultDiv = document.getElementById('result');
+    const uploadSpinner = document.getElementById('upload-spinner');
     const progressBar = document.getElementById('progress-bar');
-    const resultsTable = document.getElementById('results-table');
-    const resultsTableBody = resultsTable.querySelector('tbody');
-
+    const resultsTableBody = document.getElementById('results-table').querySelector('tbody');
+    const resultContainer = document.getElementById('result-container');
+    const toast = document.getElementById('toast');
 
     let filesToUpload = [];
+    let uploadedImages = [];
 
-    // Prevent default drag behaviors
+    // --- Event Listeners ---
+    document.addEventListener('DOMContentLoaded', loadFromLocalStorage);
+    dropArea.addEventListener('click', () => fileElem.click());
+    fileElem.addEventListener('change', (e) => handleFileSelection(e.target.files));
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropArea.addEventListener(eventName, preventDefaults, false);
-        document.body.addEventListener(eventName, preventDefaults, false); // Prevent default on body as well
+        document.body.addEventListener(eventName, preventDefaults);
+        dropArea.addEventListener(eventName, preventDefaults);
     });
-
-    // Highlight drop area when dragging over
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropArea.addEventListener(eventName, highlight, false);
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropArea.addEventListener(eventName, unhighlight, false);
-    });
-
-    // Handle dropped files
-    dropArea.addEventListener('drop', handleDrop, false);
-
-    // Handle file selection via input
-    fileElem.addEventListener('change', handleFiles, false);
-
-    // Make the entire drop area clickable
-    dropArea.addEventListener('click', () => {
-        fileElem.click();
-    });
+    ['dragenter', 'dragover'].forEach(eventName => dropArea.addEventListener(eventName, () => dropArea.classList.add('highlight')));
+    ['dragleave', 'drop'].forEach(eventName => dropArea.addEventListener(eventName, () => dropArea.classList.remove('highlight')));
+    dropArea.addEventListener('drop', handleDrop);
+    document.getElementById('uploadForm').addEventListener('submit', handleUpload);
 
     function preventDefaults(e) {
         e.preventDefault();
         e.stopPropagation();
     }
 
-    function highlight() {
-        dropArea.classList.add('highlight');
-    }
-
-    function unhighlight() {
-        dropArea.classList.remove('highlight');
-    }
-
     function handleDrop(e) {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        handleFiles({ target: { files: files } }); // Simulate input change event
+        handleFileSelection(e.dataTransfer.files);
     }
 
-    function handleFiles(event) {
-        const files = [...event.target.files]; // Convert FileList to Array
-        filesToUpload = filesToUpload.concat(files); // Add new files to the list
-        displayFiles();
-        uploadButton.disabled = filesToUpload.length === 0;
+    function handleFileSelection(files) {
+        const newFiles = [...files].filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+        if (newFiles.length === 0) return;
+        filesToUpload = [...filesToUpload, ...newFiles];
+        displayFilesToUpload();
+        uploadButton.disabled = false;
     }
 
-    function displayFiles() {
-        fileListTableBody.innerHTML = ''; // Clear current list
-        if (filesToUpload.length > 0) {
-            fileListTable.style.display = 'table'; // Show the table
-        } else {
-            fileListTable.style.display = 'none'; // Hide the table
+    async function displayFilesToUpload() {
+        if (filesToUpload.length === 0) {
+            fileListContainer.style.display = 'none';
+            return;
         }
+        fileListContainer.style.display = 'block';
+        fileListTableBody.innerHTML = '';
 
-        filesToUpload.forEach((file, index) => {
-            const row = fileListTableBody.insertRow();
+        const filePromises = filesToUpload.map((file, index) => {
+            return new Promise(resolve => {
+                const row = document.createElement('tr');
+                const thumbCell = document.createElement('td');
+                const nameCell = document.createElement('td');
+                const actionCell = document.createElement('td');
 
-            // Thumbnail Cell
-            const thumbCell = row.insertCell();
-            if (file.type.startsWith('image/')) {
+                // Thumbnail
                 const img = document.createElement('img');
                 img.classList.add('thumbnail');
                 img.alt = file.name;
                 const reader = new FileReader();
-                reader.onload = (e) => {
+                reader.onload = e => {
                     img.src = e.target.result;
+                    thumbCell.appendChild(img);
+                    resolve(row);
                 };
                 reader.readAsDataURL(file);
-                thumbCell.appendChild(img);
-            } else {
-                thumbCell.textContent = '📄'; // Generic file icon
-            }
 
+                // Filename
+                nameCell.textContent = file.name;
+                nameCell.classList.add('filename');
+                nameCell.title = file.name;
 
-            // Filename Cell
-            const nameCell = row.insertCell();
-            const filename = file.name;
-            const dotIndex = filename.lastIndexOf('.');
-            const baseName = dotIndex > 0 ? filename.substring(0, dotIndex) : filename;
-            const extension = dotIndex > 0 ? filename.substring(dotIndex) : '';
-            const truncatedName = baseName.substring(0, 10) + (baseName.length > 10 ? '...' : '') + extension;
-            nameCell.textContent = truncatedName;
-            nameCell.title = filename; // Full filename on hover
+                // Remove Button
+                const removeButton = document.createElement('button');
+                removeButton.textContent = 'Remove';
+                removeButton.classList.add('secondary', 'outline', 'action-btn');
+                removeButton.type = 'button';
+                removeButton.onclick = () => removeFile(index);
+                actionCell.appendChild(removeButton);
 
-
-            // Actions Cell
-            const actionsCell = row.insertCell();
-            const removeButton = document.createElement('button');
-            removeButton.textContent = '❌'; // Red delete icon
-            removeButton.classList.add('secondary', 'outline');
-            removeButton.style.color = 'red'; // Make it red
-            removeButton.style.padding = '2px 5px';
-            removeButton.style.fontSize = '1em';
-            removeButton.style.cursor = 'pointer';
-            removeButton.addEventListener('click', () => {
-                if (confirm(`确定要移除文件 "${file.name}" 吗？`)) {
-                    removeFile(index);
-                }
+                row.append(thumbCell, nameCell, actionCell);
             });
-            actionsCell.appendChild(removeButton);
         });
+
+        const rows = await Promise.all(filePromises);
+        rows.forEach(row => fileListTableBody.appendChild(row));
     }
 
     function removeFile(index) {
-        filesToUpload.splice(index, 1); // Remove file from array
-        displayFiles(); // Update the list display
+        filesToUpload.splice(index, 1);
+        displayFilesToUpload();
         uploadButton.disabled = filesToUpload.length === 0;
     }
 
-
-    document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+    async function handleUpload(event) {
         event.preventDefault();
+        if (filesToUpload.length === 0) return;
 
-        if (filesToUpload.length === 0) {
-            resultDiv.innerHTML = '<p style="color: red;">Please select files to upload.</p>';
-            return;
-        }
-
-        resultsTableBody.innerHTML = ''; // Clear previous results
-        resultsTable.style.display = 'none'; // Hide table until results are added
-        progressBar.style.display = 'block'; // Show progress bar
-        progressBar.value = 0;
+        setLoading(true);
+        progressBar.style.display = 'block';
+        progressBar.removeAttribute('value'); // Indeterminate progress
 
         const formData = new FormData();
-        filesToUpload.forEach(file => {
-            formData.append('file', file); // Append each file with the same name "file"
-        });
-
-
-        // Simulate progress (fetch doesn't provide upload progress directly)
-        // For real progress, you'd need XMLHttpRequest or a different approach
-        let progress = 0;
-        const interval = setInterval(() => {
-            progress += 10;
-            if (progress <= 100) {
-                progressBar.value = progress;
-            }
-        }, 100);
-
+        filesToUpload.forEach(file => formData.append('file', file));
 
         try {
-            const response = await fetch('/upload', {
-                method: 'POST',
-                body: formData
-            });
+            const response = await fetch('/upload', { method: 'POST', body: formData });
+            progressBar.setAttribute('value', '100'); // Complete
 
-            clearInterval(interval); // Stop simulating progress
-            progressBar.value = response.ok ? 100 : progressBar.value; // Set to 100 on success
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Upload failed with status: ${response.status}`);
+            }
 
-            const results = await response.json(); // Expect JSON response
-            displayResults(results); // Display results in the table
+            const newUploads = await response.json();
+            uploadedImages = [...newUploads.filter(item => item.url), ...uploadedImages];
+            saveToLocalStorage();
+            displayUploadedImages();
+            showToast('Upload successful!', 'success');
 
-            filesToUpload = []; // Clear the list after upload attempt
-            displayFiles(); // Update the display
-            uploadButton.disabled = true; // Disable button
+            // Clear the upload list
+            filesToUpload = [];
+            displayFilesToUpload();
+            uploadButton.disabled = true;
 
         } catch (error) {
-             const p = document.createElement('p');
-             p.style.color = 'red';
-             p.textContent = `An error occurred during upload: ${error.message}`;
-             resultDiv.appendChild(p);
+            console.error('Upload error:', error);
+            showToast(`Upload failed: ${error.message}`, 'error');
         } finally {
-             progressBar.style.display = 'none'; // Hide progress bar
+            setLoading(false);
+            setTimeout(() => progressBar.style.display = 'none', 500);
         }
-    });
+    }
 
-    function displayResults(results) {
-        resultsTableBody.innerHTML = ''; // Clear previous table rows
-        if (results.length > 0) {
-            resultsTable.style.display = 'table'; // Show the table
+    function displayUploadedImages() {
+        if (uploadedImages.length === 0) {
+            resultContainer.style.display = 'none';
+            return;
         }
+        resultContainer.style.display = 'block';
+        resultsTableBody.innerHTML = '';
 
-        results.forEach(item => {
+        uploadedImages.forEach(item => {
             const row = resultsTableBody.insertRow();
+            row.id = `result-${item.id}`;
 
-            // Thumbnail Cell
-            const thumbCell = row.insertCell();
-            if (item.url && item.url.startsWith(window.location.origin)) {
-                 const img = document.createElement('img');
-                 img.src = item.url; // Use the uploaded image URL
-                 img.classList.add('thumbnail');
-                 img.alt = item.name;
-                 thumbCell.appendChild(img);
-            } else {
-                thumbCell.textContent = 'N/A';
-            }
+            // Preview
+            const previewCell = row.insertCell();
+            const previewLink = document.createElement('a');
+            previewLink.href = item.url;
+            previewLink.target = '_blank';
+            const img = document.createElement('img');
+            img.src = item.url;
+            img.alt = `Preview of ${item.name}`;
+            img.classList.add('thumbnail');
+            previewLink.appendChild(img);
+            previewCell.appendChild(previewLink);
 
-
-            // Filename Cell
+            // Filename
             const nameCell = row.insertCell();
-            const filename = item.name;
-            const dotIndex = filename.lastIndexOf('.');
-            const baseName = dotIndex > 0 ? filename.substring(0, dotIndex) : filename;
-            const extension = dotIndex > 0 ? filename.substring(dotIndex) : '';
-            const truncatedName = baseName.substring(0, 10) + (baseName.length > 10 ? '...' : '') + extension;
-            nameCell.textContent = truncatedName;
-            nameCell.title = filename; // Full filename on hover
+            nameCell.textContent = item.name;
+            nameCell.classList.add('filename');
+            nameCell.title = item.name;
 
-
-            // Status Cell
-            const statusCell = row.insertCell();
-            const statusIcon = document.createElement('span');
-            statusIcon.classList.add('status-icon');
-            if (item.url) {
-                statusIcon.textContent = '✅'; // Success
-                statusCell.title = 'Upload Successful';
-            } else {
-                statusIcon.textContent = '❌'; // Error
-                statusCell.title = `Upload Failed: ${item.error}`;
-            }
-            statusCell.appendChild(statusIcon);
-
-            // URL Cell
+            // URL
             const urlCell = row.insertCell();
-            if (item.url) {
-                const urlLink = document.createElement('a');
-                urlLink.href = item.url;
-                urlLink.textContent = item.url;
-                urlLink.target = "_blank"; // Open in new tab
-                urlCell.appendChild(urlLink);
-            } else {
-                urlCell.textContent = 'N/A';
-            }
+            const urlLink = document.createElement('a');
+            urlLink.href = item.url;
+            urlLink.textContent = item.url;
+            urlLink.target = '_blank';
+            urlCell.appendChild(urlLink);
 
-            // Actions Cell
+            // Actions
             const actionsCell = row.insertCell();
+            
+            // Copy URL Button
+            const copyBtn = document.createElement('button');
+            copyBtn.textContent = 'Copy';
+            copyBtn.classList.add('outline', 'action-btn');
+            copyBtn.onclick = () => copyToClipboard(item.url, 'URL');
+            actionsCell.appendChild(copyBtn);
 
-            if (item.url) {
-                // Copy URL Icon
-                const copyUrlIcon = document.createElement('span');
-                copyUrlIcon.textContent = '📋'; // Clipboard icon
-                copyUrlIcon.style.cursor = 'pointer';
-                copyUrlIcon.style.marginRight = '10px';
-                copyUrlIcon.title = 'Copy URL';
-                copyUrlIcon.addEventListener('click', () => {
-                    navigator.clipboard.writeText(item.url).then(() => {
-                        console.log('URL copied to clipboard');
-                        // Optional: Show a temporary success message
-                    }).catch(err => {
-                        console.error('Failed to copy URL: ', err);
-                        // Optional: Show a temporary error message
-                    });
-                });
-                actionsCell.appendChild(copyUrlIcon);
+            // Preview Button
+            const previewBtn = document.createElement('button');
+            previewBtn.textContent = 'Preview';
+            previewBtn.classList.add('outline', 'action-btn');
+            previewBtn.onclick = () => window.open(item.url, '_blank');
+            actionsCell.appendChild(previewBtn);
 
-                // More Options Dropdown
-                const dropdownDiv = document.createElement('div');
-                dropdownDiv.classList.add('dropdown');
-                dropdownDiv.style.display = 'inline-block'; // Ensure dropdown is inline with icon
-
-                const moreIcon = document.createElement('span');
-                moreIcon.textContent = '⋮'; // Three dots icon
-                moreIcon.style.cursor = 'pointer';
-                moreIcon.title = 'More options';
-                moreIcon.classList.add('more-options-icon'); // Add a class for potential styling
-                dropdownDiv.appendChild(moreIcon);
-
-                const dropdownContent = document.createElement('div');
-                dropdownContent.classList.add('dropdown-content');
-
-                // Copy as Markdown
-                const copyMarkdownLink = document.createElement('a');
-                copyMarkdownLink.textContent = 'Copy as Markdown';
-                copyMarkdownLink.addEventListener('click', () => {
-                    const markdown = `![${item.name}](${item.url})`;
-                    navigator.clipboard.writeText(markdown).then(() => {
-                        console.log('Markdown copied to clipboard');
-                    }).catch(err => {
-                        console.error('Failed to copy Markdown: ', err);
-                    });
-                });
-                dropdownContent.appendChild(copyMarkdownLink);
-
-                // Copy as HTML
-                const copyHtmlLink = document.createElement('a');
-                copyHtmlLink.textContent = 'Copy as HTML';
-                copyHtmlLink.addEventListener('click', () => {
-                    const html = `<img src="${item.url}" alt="${item.name}">`;
-                    navigator.clipboard.writeText(html).then(() => {
-                        console.log('HTML copied to clipboard');
-                    }).catch(err => {
-                        console.error('Failed to copy HTML: ', err);
-                    });
-                });
-                dropdownContent.appendChild(copyHtmlLink);
-
-                // Copy as BBCode
-                const copyBbcodeLink = document.createElement('a');
-                copyBbcodeLink.textContent = 'Copy as BBCode';
-                copyBbcodeLink.addEventListener('click', () => {
-                    const bbcode = `[img]${item.url}[/img]`;
-                    navigator.clipboard.writeText(bbcode).then(() => {
-                        console.log('BBCode copied to clipboard');
-                    }).catch(err => {
-                        console.error('Failed to copy BBCode: ', err);
-                    });
-                });
-                dropdownContent.appendChild(copyBbcodeLink);
-
-                dropdownDiv.appendChild(dropdownContent);
-                actionsCell.appendChild(dropdownDiv);
-            }
+            // Delete Button
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = 'Delete';
+            deleteBtn.classList.add('contrast', 'outline', 'action-btn');
+            deleteBtn.onclick = () => handleDelete(item.id, item.deleteToken);
+            actionsCell.appendChild(deleteBtn);
         });
     }
 
+    async function handleDelete(id, token) {
+        if (!confirm('Are you sure you want to permanently delete this image?')) return;
+
+        try {
+            const response = await fetch(`/api/image/${id}/${token}`, { method: 'DELETE' });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to delete image.');
+            }
+            
+            // Remove from UI and local storage
+            document.getElementById(`result-${id}`)?.remove();
+            uploadedImages = uploadedImages.filter(img => img.id !== id);
+            saveToLocalStorage();
+            displayUploadedImages(); // Re-render to hide table if empty
+            showToast('Image deleted successfully.', 'success');
+
+        } catch (error) {
+            console.error('Delete error:', error);
+            showToast(`Error: ${error.message}`, 'error');
+        }
+    }
+
+    // --- Utility Functions ---
+    function setLoading(isLoading) {
+        uploadButton.disabled = isLoading;
+        uploadSpinner.hidden = !isLoading;
+        uploadButton.ariaBusy = isLoading ? 'true' : 'false';
+    }
+
+    function copyToClipboard(text, type) {
+        navigator.clipboard.writeText(text).then(() => {
+            showToast(`${type} copied to clipboard!`, 'success');
+        }).catch(err => {
+            showToast(`Failed to copy ${type}.`, 'error');
+            console.error('Clipboard error:', err);
+        });
+    }
+
+    let toastTimeout;
+    function showToast(message, type = 'success') {
+        clearTimeout(toastTimeout);
+        toast.textContent = message;
+        toast.style.backgroundColor = type === 'error' ? 'var(--pico-color-red-500)' : 'var(--pico-color-green-500)';
+        toast.classList.add('show');
+        toastTimeout = setTimeout(() => {
+            toast.classList.remove('show');
+        }, 3000);
+    }
+
+    function saveToLocalStorage() {
+        try {
+            // Only store essential data to avoid large localStorage usage
+            const dataToStore = uploadedImages.map(({ id, name, url, deleteToken }) => ({ id, name, url, deleteToken }));
+            localStorage.setItem('imger_uploads', JSON.stringify(dataToStore));
+        } catch (e) {
+            console.warn('Could not save to localStorage:', e);
+        }
+    }
+
+    function loadFromLocalStorage() {
+        try {
+            const stored = localStorage.getItem('imger_uploads');
+            if (stored) {
+                uploadedImages = JSON.parse(stored);
+                displayUploadedImages();
+            }
+        } catch (e) {
+            console.warn('Could not load from localStorage:', e);
+            localStorage.removeItem('imger_uploads');
+        }
+    }
 </script>
 </body>
 </html>

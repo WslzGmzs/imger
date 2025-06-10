@@ -82,7 +82,7 @@
     const fileListTableBody = document.getElementById('file-list-table').querySelector('tbody');
     const fileListContainer = document.getElementById('file-list-container');
     const uploadButton = document.getElementById('upload-button');
-    const uploadSpinner = document.getElementById('upload-spinner');
+    const uploadSpinner = document.getElementById('upload-spinner'); // Assuming you have an element for this
     const progressBar = document.getElementById('progress-bar');
     const resultsTableBody = document.getElementById('results-table').querySelector('tbody');
     const resultContainer = document.getElementById('result-container');
@@ -92,16 +92,38 @@
     let filesToUpload = [];
     let uploadedImagesState = [];
 
+    // --- Event Listeners ---
     document.addEventListener('DOMContentLoaded', loadUploadedImagesFromServer);
     dropArea.addEventListener('click', () => fileElem.click());
-    fileElem.addEventListener('change', (e) => handleFileSelection(e.target.files));
+
+    let fileSelectionTimeout;
+    fileElem.addEventListener('change', (e) => {
+        clearTimeout(fileSelectionTimeout);
+        fileSelectionTimeout = setTimeout(() => {
+            if (e.target && e.target.files) {
+                handleFileSelection(e.target.files);
+            }
+            // CRITICAL: Clear the value of the file input.
+            // This allows the 'change' event to fire again even if the user selects the same file.
+            if (e.target) { // Check if e.target still exists
+                e.target.value = null;
+            }
+        }, 50); // 50ms delay
+    });
+
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         document.body.addEventListener(eventName, preventDefaults);
         dropArea.addEventListener(eventName, preventDefaults);
     });
     ['dragenter', 'dragover'].forEach(eventName => dropArea.addEventListener(eventName, () => dropArea.classList.add('highlight')));
     ['dragleave', 'drop'].forEach(eventName => dropArea.addEventListener(eventName, () => dropArea.classList.remove('highlight')));
-    dropArea.addEventListener('drop', handleDrop);
+    
+    dropArea.addEventListener('drop', (e) => {
+        // For drag and drop, process immediately
+        if (e.dataTransfer && e.dataTransfer.files) {
+            handleFileSelection(e.dataTransfer.files);
+        }
+    });
     document.getElementById('uploadForm').addEventListener('submit', handleUpload);
 
     function preventDefaults(e) {
@@ -109,29 +131,49 @@
         e.stopPropagation();
     }
 
-    function handleDrop(e) {
-        handleFileSelection(e.dataTransfer.files);
-    }
+    function handleFileSelection(filesFromInput) {
+        if (!filesFromInput || filesFromInput.length === 0) {
+            return;
+        }
 
-    function handleFileSelection(files) {
-        const newFiles = [...files].filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
-        if (newFiles.length === 0 && files.length > 0) {
+        const newFiles = [...filesFromInput].filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+
+        if (newFiles.length === 0 && filesFromInput.length > 0) {
             showToast('Only image and video files are allowed.', 'warning');
             return;
         }
         if (newFiles.length === 0) return;
 
-        filesToUpload = [...filesToUpload, ...newFiles];
+        const uniqueNewFiles = newFiles.filter(newFile =>
+            !filesToUpload.some(existingFile =>
+                existingFile.name === newFile.name &&
+                existingFile.size === newFile.size &&
+                existingFile.lastModified === newFile.lastModified
+            )
+        );
+
+        if (uniqueNewFiles.length < newFiles.length) {
+            showToast('Some selected files were already in the upload list.', 'info');
+        }
+        
+        if (uniqueNewFiles.length === 0 && newFiles.length > 0) {
+            // All selected files were already present in filesToUpload
+            return;
+        }
+
+        filesToUpload = [...filesToUpload, ...uniqueNewFiles];
         displayFilesToUpload();
-        uploadButton.disabled = false;
+        // uploadButton.disabled = false; // displayFilesToUpload will handle this
     }
 
     async function displayFilesToUpload() {
         if (filesToUpload.length === 0) {
             fileListContainer.style.display = 'none';
+            uploadButton.disabled = true; 
             return;
         }
         fileListContainer.style.display = 'block';
+        uploadButton.disabled = false; // Enable button if there are files
         fileListTableBody.innerHTML = '';
 
         const filePromises = filesToUpload.map((file, index) => {
@@ -147,16 +189,15 @@
                 if (file.type.startsWith('image/')) {
                     const reader = new FileReader();
                     reader.onload = e => { img.src = e.target.result; thumbCell.appendChild(img); resolve(row); };
-                    reader.onerror = () => { thumbCell.textContent = '🖼️'; resolve(row); }; // Fallback icon
+                    reader.onerror = () => { thumbCell.textContent = '🖼️'; resolve(row); };
                     reader.readAsDataURL(file);
                 } else if (file.type.startsWith('video/')) {
-                    thumbCell.textContent = '🎬'; // Video icon
+                    thumbCell.textContent = '🎬';
                     resolve(row);
                 } else {
-                    thumbCell.textContent = '📄'; // Generic file icon
+                    thumbCell.textContent = '📄';
                     resolve(row);
                 }
-
 
                 nameCell.textContent = file.name;
                 nameCell.classList.add('filename');
@@ -178,12 +219,11 @@
 
     function removeFileFromUploadList(index) {
         filesToUpload.splice(index, 1);
-        displayFilesToUpload();
-        uploadButton.disabled = filesToUpload.length === 0;
+        displayFilesToUpload(); // This will re-evaluate and disable button if list becomes empty
     }
 
     async function handleUpload(event) {
-        event.preventDefault(); // CRITICAL: Must be first
+        event.preventDefault(); 
         event.stopPropagation();
 
         if (filesToUpload.length === 0) {
@@ -205,14 +245,13 @@
             try {
                 responseData = await response.json();
             } catch (e) {
-                // This means server returned non-JSON, likely an HTML error page or unexpected output
                 console.error("Failed to parse server response as JSON:", e, "Status:", response.status, response.statusText);
                 throw new Error(`Server error: ${response.status} ${response.statusText}. Check server logs.`);
             }
             
-            progressBar.setAttribute('value', '100'); // Visually complete progress
+            progressBar.setAttribute('value', '100');
 
-            if (!response.ok && response.status !== 207) { // 207 is Multi-Status, handled below
+            if (!response.ok && response.status !== 207) {
                 const errorMsg = responseData.error || (Array.isArray(responseData) && responseData[0]?.error) || `Upload request failed: ${response.status}`;
                 throw new Error(errorMsg);
             }
@@ -222,11 +261,10 @@
             const erroredUploads = allResults.filter(item => item.error || item.status === 'error');
 
             if (successfulNewUploads.length > 0) {
-                // Add to state and re-sort by date, newest first
                 uploadedImagesState = [...successfulNewUploads, ...uploadedImagesState]
-                    .filter((img, index, self) => index === self.findIndex((t) => t.id === img.id)) // Deduplicate by id
+                    .filter((img, index, self) => index === self.findIndex((t) => t.id === img.id))
                     .sort((a,b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
-                displayUploadedImages(); // Re-render the list of all images
+                displayUploadedImages();
                 showToast(`${successfulNewUploads.length} file(s) uploaded!`, 'success');
             }
 
@@ -238,18 +276,20 @@
             
             if (successfulNewUploads.length === 0 && erroredUploads.length === 0 && allResults.every(r => r.status === 'duplicate')) {
                  showToast('All selected files are duplicates of existing uploads.', 'info');
-            } else if (successfulNewUploads.length === 0 && erroredUploads.length === 0 && filesToUpload.length > 0) {
-                 showToast('Upload processed, but no files were returned as new or errored.', 'warning');
+            } else if (successfulNewUploads.length === 0 && erroredUploads.length === 0 && filesToUpload.length > 0 && allResults.length === 0) {
+                 // This case means server returned empty array or non-array, but client had files.
+                 // The JSON parsing error above would likely catch non-array.
+                 // If server returned empty array for non-empty FormData, that's odd.
+                 showToast('Upload processed, but server returned no information about the files.', 'warning');
             }
 
-            filesToUpload = []; // Clear list after processing
-            displayFilesToUpload();
-            uploadButton.disabled = true;
+
+            filesToUpload = [];
+            displayFilesToUpload(); // This will also disable the upload button
 
         } catch (error) {
             console.error('HandleUpload main catch error:', error);
             showToast(`Upload error: ${error.message}`, 'error');
-            // Keep filesToUpload so user can retry if it was a network issue.
         } finally {
             setLoadingState(false);
             setTimeout(() => {
@@ -270,7 +310,7 @@
                 throw new Error(`Failed to fetch images: ${response.status} ${response.statusText}`);
             }
             const imagesFromServer = await response.json();
-            uploadedImagesState = imagesFromServer.sort((a,b) => (b.uploadedAt || 0) - (a.uploadedAt || 0)); // Sort by date
+            uploadedImagesState = imagesFromServer.sort((a,b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
             displayUploadedImages();
         } catch (error) {
             console.error('Error loading images from server:', error);
@@ -302,7 +342,7 @@
             img.src = item.url;
             img.alt = `Preview of ${item.name}`;
             img.classList.add('thumbnail');
-            img.onerror = () => { previewCell.textContent = '⚠️'; previewCell.title = 'Error loading preview'; }; // Preview error
+            img.onerror = () => { previewCell.textContent = '⚠️'; previewCell.title = 'Error loading preview'; };
             previewLink.appendChild(img);
             previewCell.appendChild(previewLink);
 
@@ -363,7 +403,9 @@
 
     function setLoadingState(isLoading) {
         uploadButton.disabled = isLoading;
-        uploadSpinner.style.display = isLoading ? 'inline-block' : 'none'; // Assuming you have an actual spinner element
+        if (uploadSpinner) { // Check if spinner element exists
+            uploadSpinner.style.display = isLoading ? 'inline-block' : 'none';
+        }
         uploadButton.setAttribute('aria-busy', isLoading ? 'true' : 'false');
     }
 
@@ -377,7 +419,7 @@
     }
 
     let toastTimeout;
-    function showToast(message, type = 'info') { // Default to info
+    function showToast(message, type = 'info') {
         clearTimeout(toastTimeout);
         toast.textContent = message;
         switch(type) {

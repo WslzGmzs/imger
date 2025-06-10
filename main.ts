@@ -32,7 +32,7 @@ function cleanCache() {
         if (oldestKey) cache.delete(oldestKey); else break;
     }
 }
-setInterval(cleanCache, CACHE_TTL / 2); // Clean cache periodically
+setInterval(cleanCache, CACHE_TTL / 2);
 
 async function calculateMd5(data: Uint8Array): Promise<string> {
   const hashBuffer = await crypto.subtle.digest("MD5", data);
@@ -57,7 +57,7 @@ async function uploadHandler(request: Request): Promise<Response> {
       return new Response(JSON.stringify({ error: "No files uploaded" }), { status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
     }
 
-    const results = [];
+    const results: Array<{id?: string, name: string; url?: string; error?: string; status: string, deleteToken?: string}> = [];
     const origin = new URL(request.url).origin;
 
     for (const file of files) {
@@ -68,6 +68,10 @@ async function uploadHandler(request: Request): Promise<Response> {
 
       try {
         const imageBytes = new Uint8Array(await file.arrayBuffer());
+        if (imageBytes.byteLength === 0) {
+            results.push({ name: file.name, error: "File is empty", status: "error" });
+            continue;
+        }
         const md5Hash = await calculateMd5(imageBytes);
         const existingImageEntry = await kv.get<string>(["md5_to_id", md5Hash]);
 
@@ -103,12 +107,12 @@ async function uploadHandler(request: Request): Promise<Response> {
         const atomicOp = kv.atomic()
           .set(["images", imageId, "meta"], imageMeta)
           .set(["md5_to_id", md5Hash], imageId);
-        const res = await atomicOp.commit();
-        if (!res.ok) throw new Error("Failed to commit initial metadata to KV.");
+        const commitRes = await atomicOp.commit();
+        if (!commitRes.ok) throw new Error("KV Error: Failed to commit initial metadata.");
 
         for (let i = 0; i < imageMeta.chunks; i++) {
           const start = i * KV_CHUNK_SIZE;
-          const end = start + KV_CHUNK_SIZE;
+          const end = Math.min(start + KV_CHUNK_SIZE, imageBytes.byteLength);
           await kv.set(["images", imageId, "chunk", i], imageBytes.slice(start, end));
         }
 
@@ -120,13 +124,44 @@ async function uploadHandler(request: Request): Promise<Response> {
 
       } catch (error) {
         console.error(`Error processing file ${file.name}:`, error);
-        results.push({ name: file.name, error: error.message, status: "error" });
+        results.push({ name: file.name, error: error.message || "Unknown processing error", status: "error" });
       }
     }
-    return new Response(JSON.stringify(results), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
-  } catch (error) {
-    console.error("Upload handler error:", error);
-    return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+    
+    const hasErrors = results.some(r => r.error);
+    const allErrors = results.every(r => r.error);
+    const hasSuccess = results.some(r => r.url && !r.error);
+
+    let httpStatus = 200; // Default to OK
+    if (hasErrors) {
+        if (allErrors && results.length > 0) {
+            httpStatus = 500; // If all attempts resulted in error, likely server-side
+        } else if (hasSuccess) {
+            httpStatus = 207; // Multi-Status: some succeeded, some failed
+        } else {
+             // This case (hasErrors but not allErrors and not hasSuccess) implies results might be empty or only errors
+            httpStatus = 500;
+        }
+    } else if (!hasSuccess && results.length > 0) {
+        // No errors, but no successes either (e.g. all duplicates, or some other non-error, non-success status)
+        // This might still be a 200 if duplicates are considered "successful" in a way.
+        // If only duplicates, 200 is fine.
+        if (results.every(r => r.status === 'duplicate')) {
+            httpStatus = 200;
+        } else {
+            httpStatus = 200; // Or a more specific code if needed
+        }
+    }
+
+
+    return new Response(JSON.stringify(results), {
+      status: httpStatus,
+      headers: { "Content-Type": "application/json", ...getCorsHeaders() },
+    });
+
+  } catch (error) { // Outer catch for errors like formData parsing
+    console.error("Upload handler critical error:", error);
+    return new Response(JSON.stringify({ error: "Internal Server Error during upload setup" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
   }
 }
 
@@ -174,24 +209,24 @@ async function deleteImageHandler(imageId: string, deleteToken: string): Promise
             return new Response(JSON.stringify({ error: "Image not found" }), { status: 404, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
         }
         if (metaEntry.value.deleteToken !== deleteToken) {
-            return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 403, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+            return new Response(JSON.stringify({ error: "Unauthorized to delete" }), { status: 403, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
         }
 
         const atomicOp = kv.atomic().delete(["images", imageId, "meta"]);
-        if (metaEntry.value.md5) { // Ensure md5 exists before trying to delete
+        if (metaEntry.value.md5) {
             atomicOp.delete(["md5_to_id", metaEntry.value.md5]);
         }
         for (let i = 0; i < metaEntry.value.chunks; i++) {
             atomicOp.delete(["images", imageId, "chunk", i]);
         }
         const res = await atomicOp.commit();
-        if (!res.ok) throw new Error("Failed to commit deletion to KV.");
+        if (!res.ok) throw new Error("KV Error: Failed to commit deletion.");
 
         cache.delete(imageId);
         return new Response(JSON.stringify({ message: "Image deleted successfully" }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
     } catch (error) {
         console.error(`Delete image error for ${imageId}:`, error);
-        return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+        return new Response(JSON.stringify({ error: error.message || "Internal Server Error during deletion" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
     }
 }
 
@@ -199,33 +234,35 @@ async function listImagesHandler(request: Request): Promise<Response> {
     try {
         const images = [];
         const origin = new URL(request.url).origin;
+        // Note: Iterating with prefix can be less performant on very large datasets
+        // but is fine for typical free-tier usage.
         const iter = kv.list<ImageMeta>({ prefix: ["images"] });
 
         for await (const entry of iter) {
-            // Key: ["images", <imageId>, "meta"]
-            if (entry.key.length === 3 && entry.key[2] === "meta") {
+            if (entry.key.length === 3 && entry.key[2] === "meta") { // Ensure it's a meta entry
                 const imageMeta = entry.value;
-                if (imageMeta?.completed) {
+                if (imageMeta?.completed) { // Check if imageMeta and completed flag are valid
                     const imageId = entry.key[1] as string;
-                    const fileExtension = imageMeta.name.split('.').pop() || '';
+                    const fileExtension = imageMeta.name?.split('.').pop() || ''; // Add safe navigation for name
                     const imageUrl = `${origin}/image/${imageId}${fileExtension ? '.' + fileExtension : ''}`;
                     images.push({
                         id: imageId,
-                        name: imageMeta.name,
+                        name: imageMeta.name || "Unnamed File",
                         url: imageUrl,
-                        uploadedAt: imageMeta.uploadedAt,
+                        uploadedAt: imageMeta.uploadedAt || Date.now(),
                         deleteToken: imageMeta.deleteToken,
                     });
                 }
             }
         }
-        images.sort((a, b) => b.uploadedAt - a.uploadedAt); // Newest first
+        images.sort((a, b) => b.uploadedAt - a.uploadedAt);
         return new Response(JSON.stringify(images), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
     } catch (error) {
         console.error("List images error:", error);
-        return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
+        return new Response(JSON.stringify({ error: "Internal Server Error while listing images" }), { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders() } });
     }
 }
+
 
 async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
